@@ -1,26 +1,51 @@
-const express = require('express');
-const cors = require('cors');
-require('dotenv').config();
-const pool = require('./config/db'); // This will automatically test the connection
-const userRoute = require('./routes/userRoute');
-const dataRoute = require('./routes/dataRoute');
-const formRoute = require('./routes/formRoute');
-const helperRoute = require('./routes/helperRoute');
+const net = require('net');
 
-const app = express();
-app.use(cors());
-app.use(express.json());
+// Server NTRIP
+const ntripHost = 'nrtk.big.go.id';
+const ntripPort = 2001;
+const mountPoint = 'max-rtcm3';  // Ubah sesuai mount point yang diperlukan
 
-// app.use('/api/users', usersRoute);
+// Username dan Password dalam base64
+const base64Auth = Buffer.from('tgi456:tgi456').toString('base64');  // Ubah sesuai username:password
 
-app.get('/', (req, res) => {
-  res.send('Welcome to the Sawah Digital Apps');
+// Data GGA (seperti contoh yang diberikan)
+let mostRecentGGA = "$GNGGA,043454.00,0754.8030033,S,11005.6762417,E,1,12,0.57,29.175,M,5.844,M,,*56";
+
+// Membuat koneksi ke server NTRIP
+const client = new net.Socket();
+
+client.connect(ntripPort, ntripHost, () => {
+    console.log(`Connected to ${ntripHost}:${ntripPort}`);
+    
+    // Membuat permintaan NTRIP
+    const request = `GET /${mountPoint} HTTP/1.0\r\n` +
+        `User-Agent: NTRIP NodeJS Client/1.0\r\n` +
+        `Authorization: Basic ${base64Auth}\r\n` +
+        `Accept: */*\r\n +`
+        `Connection: close\r\n\r\n`;
+
+    // Mengirim permintaan GET ke server NTRIP
+    client.write(request);
+
+    // Mengirim data GGA setelah beberapa detik (misalnya, setiap 5 detik)
+    setInterval(() => {
+        console.log(`Sending GGA: ${mostRecentGGA}`);
+        client.write(mostRecentGGA + "\r\n");
+    }, 5000);  // Mengirim setiap 5 detik (bisa diubah sesuai kebutuhan)
 });
 
-app.use('/user', userRoute);
-app.use('/data', dataRoute);
-app.use('/form', formRoute);
-app.use('/helper', helperRoute);
+client.on('data', (data) => {
+    console.log('Received data from server:');
+    console.log(data.toString());
 
-const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+    // Data RTCM bisa diolah di sini
+    // Misalnya, Anda bisa mengirim data ke perangkat Bluetooth atau menyimpan ke file
+});
+
+client.on('close', () => {
+    console.log('Connection closed');
+});
+
+client.on('error', (err) => {
+    console.error('Error: ', err);
+});
