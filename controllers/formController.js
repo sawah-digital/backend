@@ -6,6 +6,8 @@ const fs = require('fs').promises;
 const path = require('path');
 const { createCanvas } = require('canvas');
 const axios = require('axios');
+const { Buffer } = require('buffer');
+const sharp = require('sharp');
 require('dotenv').config();
 
 cloudinary.config({
@@ -299,9 +301,8 @@ const generatePdf = async (req, res) => {
     });
     
     // Generate polygon visualization
-    const polygonImage = await drawPolygon(orderedPoints, usableWidth, mapHeight);
-    const polygonImageBytes = await fs.readFile(polygonImage);
-    const polygonPdfImage = await pdfDoc.embedPng(polygonImageBytes);
+    const polygonImageBuffer = await createPolygonImage(orderedPoints, usableWidth, mapHeight);
+    const polygonPdfImage = await pdfDoc.embedPng(polygonImageBuffer);
     
     // Draw polygon
     page.drawImage(polygonPdfImage, {
@@ -503,7 +504,6 @@ const generatePdf = async (req, res) => {
     currentY -= lineSpacing;
     
     drawLegendItem('Luas Lahan', form.luas_lahan + ' meter²');
-    drawLegendItem('Jenis Tanah', 'Regosol');
     drawLegendItem('Jenis Tanaman', form.jenis_tanaman);
     drawLegendItem('Masa Panen', form.masa_panen);
     drawLegendItem('Sumber Air', form.sumber_air);
@@ -667,13 +667,6 @@ const generatePdf = async (req, res) => {
       }
     }
     
-    // Delete the temporary polygon image after use
-    try {
-      await fs.unlink(polygonImage);
-    } catch (error) {
-      console.error('Error deleting temporary polygon image:', error);
-    }
-    
     const pdfBytes = await pdfDoc.save();
 
     res.setHeader('Content-Type', 'application/pdf');
@@ -686,67 +679,52 @@ const generatePdf = async (req, res) => {
 };
 
 // Helper function to draw polygon
-async function drawPolygon(points, width, height) {
-  // Create a temporary canvas to draw the polygon
-  const canvas = createCanvas(width, height);
-  const ctx = canvas.getContext('2d');
-  
-  // Find the bounding box of all points for scaling
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  points.forEach(point => {
-    minX = Math.min(minX, point.utm_x);
-    minY = Math.min(minY, point.utm_y);
-    maxX = Math.max(maxX, point.utm_x);
-    maxY = Math.max(maxY, point.utm_y);
-  });
-  
-  // Calculate the scale and offset to fit the polygon in the canvas
-  // Add some padding
-  const padding = 20;
-  const scaleX = (width - 2 * padding) / (maxX - minX || 1); // Avoid division by zero
-  const scaleY = (height - 2 * padding) / (maxY - minY || 1);
-  const scale = Math.min(scaleX, scaleY);
-  
-  // Translate to center the polygon
-  const offsetX = padding + (width - 2 * padding - scale * (maxX - minX)) / 2;
-  const offsetY = padding + (height - 2 * padding - scale * (maxY - minY)) / 2;
-  
-  // Draw the polygon
-  ctx.fillStyle = 'white';
-  ctx.fillRect(0, 0, width, height);
-  
-  ctx.strokeStyle = 'black';
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  
-  // Convert the first point
-  const firstPoint = points[0];
-  const startX = offsetX + scale * (firstPoint.utm_x - minX);
-  const startY = height - (offsetY + scale * (firstPoint.utm_y - minY)); // Flip Y axis for canvas coordinates
-  
-  ctx.moveTo(startX, startY);
-  
-  // Draw the rest of the points
-  for (let i = 1; i < points.length; i++) {
-    const point = points[i];
-    const x = offsetX + scale * (point.utm_x - minX);
-    const y = height - (offsetY + scale * (point.utm_y - minY)); // Flip Y axis for canvas coordinates
-    ctx.lineTo(x, y);
+async function createPolygonImage(points, width, height) {
+  try {
+    // Hitung batas koordinat UTM
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+
+    points.forEach(point => {
+      minX = Math.min(minX, point.utm_x);
+      maxX = Math.max(maxX, point.utm_x);
+      minY = Math.min(minY, point.utm_y);
+      maxY = Math.max(maxY, point.utm_y);
+    });
+
+    // Padding
+    const padding = 20;
+    const xRange = maxX - minX || 1;
+    const yRange = maxY - minY || 1;
+
+    const scaleX = (width - 2 * padding) / xRange;
+    const scaleY = (height - 2 * padding) / yRange;
+    const scale = Math.min(scaleX, scaleY);
+
+    const offsetX = padding + (width - 2 * padding - scale * xRange) / 2;
+    const offsetY = padding + (height - 2 * padding - scale * yRange) / 2;
+
+    // Konversi koordinat ke titik SVG
+    const polygonPoints = points.map(p => {
+      const x = offsetX + scale * (p.utm_x - minX);
+      const y = height - (offsetY + scale * (p.utm_y - minY)); // flip Y
+      return `${x},${y}`;
+    }).join(' ');
+
+    // SVG sesuai style canvas drawPolygon
+    const svgContent = `
+      <svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
+        <rect width="100%" height="100%" fill="white"/>
+        <polyline points="${polygonPoints} ${polygonPoints.split(' ')[0]}" fill="none" stroke="black" stroke-width="2"/>
+      </svg>
+    `;
+
+    // Konversi SVG ke PNG buffer
+    const buffer = await sharp(Buffer.from(svgContent)).png().toBuffer();
+    return buffer;
+  } catch (error) {
+    console.error('Error creating polygon image:', error);
+    throw error;
   }
-  
-  // Close the path
-  ctx.lineTo(startX, startY);
-  ctx.stroke();
-  
-  // Save the canvas to a temporary file
-  const tempFilePath = path.join(__dirname, 'temp', `polygon_${Date.now()}.png`);
-  // Ensure the temp directory exists
-  await fs.mkdir(path.dirname(tempFilePath), { recursive: true });
-  
-  const buffer = canvas.toBuffer('image/png');
-  await fs.writeFile(tempFilePath, buffer);
-  
-  return tempFilePath;
 }
 
 // Helper function to get Indonesian month name
@@ -756,17 +734,6 @@ function getMonthName(monthIndex) {
     'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'
   ];
   return months[monthIndex];
-}
-
-// Function to download image from URL and return as Buffer
-async function downloadImage(url) {
-  try {
-    const response = await axios.get(url, { responseType: 'arraybuffer' });
-    return response.data;
-  } catch (error) {
-    console.error(`Error downloading image from ${url}:`, error);
-    throw error;
-  }
 }
 
 module.exports = {
