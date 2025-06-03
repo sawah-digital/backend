@@ -511,20 +511,27 @@ const generatePdf = async (req, res) => {
     drawLegendItem('Ketersediaan Air', form.ketersediaan_air);
     drawLegendItem('Metode Pengairan', form.metode_pengairan);
     
-    // Pelaksana survei
+    /// Pelaksana survei
     page.drawText('Pelaksana Survei', {
       x: labelColumn,
       y: currentY,
       size: 10,
       font: boldFont,
     });
-    
-    if (Array.isArray(form.pelaksana_survei)) {
 
-      const surveyorsHeight = lineSpacing * form.pelaksana_survei.length;
+    if (Array.isArray(form.pelaksana_survei)) {
+      const namesPerColumn = 3;
+      const total = form.pelaksana_survei.length;
+      const column1 = form.pelaksana_survei.slice(0, namesPerColumn);
+      const column2 = form.pelaksana_survei.slice(namesPerColumn);
+
+      const maxRows = Math.max(column1.length, column2.length);
+      const surveyorsHeight = lineSpacing * maxRows;
       addNewPageIfNeeded(surveyorsHeight);
-      
-      form.pelaksana_survei.forEach((surveyor, index) => {
+
+      const column2X = valueColumn + 200; // Geser kolom 2 ke kanan (atur sesuai lebar halaman)
+
+      column1.forEach((name, index) => {
         if (index === 0) {
           page.drawText(':', {
             x: colonPosition,
@@ -533,16 +540,33 @@ const generatePdf = async (req, res) => {
             font: regularFont,
           });
         }
-        
-        page.drawText(`${index + 1}. ${surveyor}`, {
+
+        page.drawText(`${index + 1}. ${name}`, {
           x: valueColumn,
           y: currentY,
           size: 10,
           font: regularFont,
         });
-        
+
         currentY -= lineSpacing;
       });
+
+      // Reset Y untuk kolom 2
+      let column2Y = currentY + (lineSpacing * column2.length); // Kembali ke posisi atas kolom 1
+
+      column2.forEach((name, index) => {
+        page.drawText(`${index + namesPerColumn + 1}. ${name}`, {
+          x: column2X,
+          y: column2Y,
+          size: 10,
+          font: regularFont,
+        });
+
+        column2Y -= lineSpacing;
+      });
+
+      // Pastikan currentY tetap yang paling rendah (agar tidak tumpang tindih)
+      currentY = Math.min(currentY, column2Y);
     }
     
     // 4. DOCUMENTATION SECTION
